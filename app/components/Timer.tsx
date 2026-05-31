@@ -71,13 +71,13 @@ function Timer() {
         ? "/assets/sprites/bunny-break.png"
         : "/assets/sprites/bunny-pomodoro.png";
 
-  function musicForMode(m: Mode) {
-    return m === "break" ? settingsInfo.breakMusic : settingsInfo.workMusic;
-  }
-
   function shouldPlayMusic() {
-    const choice = musicForMode(mode);
-    return isRunning && Boolean(choice) && choice !== "None";
+    return (
+      isRunning &&
+      (mode === "pomodoro" || mode === "stopwatch") &&
+      Boolean(settingsInfo.music) &&
+      settingsInfo.music !== "None"
+    );
   }
 
   function stopMusic() {
@@ -87,12 +87,9 @@ function Timer() {
   }
 
   function playSavedMusic() {
-    if (!audioRef.current) return;
-    const choice = musicForMode(mode);
-    if (!choice || choice === "None") return;
-    audioRef.current.src = choice;
+    if (!audioRef.current || !settingsInfo.music || settingsInfo.music === "None") return;
+    audioRef.current.src = settingsInfo.music;
     audioRef.current.loop = true;
-    audioRef.current.volume = settingsInfo.volume;
     audioRef.current.currentTime = 0;
     audioRef.current.play().catch(() => { });
   }
@@ -313,13 +310,7 @@ function Timer() {
 
     playSavedMusic();
     return stopMusic;
-  }, [isRunning, mode, settingsInfo.workMusic, settingsInfo.breakMusic]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Apply volume changes live without restarting playback.
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.volume = settingsInfo.volume;
-    if (bellRef.current) bellRef.current.volume = settingsInfo.volume;
-  }, [settingsInfo.volume]);
+  }, [isRunning, mode, settingsInfo.music]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── helpers ───────────────────────────────────────────────────────────────
   function switchToMode(newMode: Mode, newSeconds?: number) {
@@ -357,14 +348,13 @@ function Timer() {
       </div>
     );
   }
-  //Changing the tab title when needed
-  const minutes = (modeRef.current === "stopwatch") ? Math.floor(swElapsed / 60) : Math.floor(seconds / 60);
-  const remSec = (modeRef.current === "stopwatch") ? Math.floor(swElapsed % 60) : Math.floor(seconds % 60);
+//CHanging the tab title when needed
+  const minutes = (modeRef.current === "stopwatch")? Math.floor(swElapsed/60): Math.floor(seconds / 60);
+  const remSec = (modeRef.current === "stopwatch")? Math.floor(swElapsed%60): Math.floor(seconds % 60);
   const formatted = `${String(minutes).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
   useEffect(() => {
     document.title = `${formatted} - FlowSync`;
   }, [formatted]);
-
 
   return (
     <Card bg="#9CAFAA" className="timer-card-with-mascot w-[min(92vw,620px)] px-4 sm:px-10 py-6 sm:py-8 items-center flex flex-col">
@@ -388,7 +378,7 @@ function Timer() {
           <TabSlot forMode="pomodoro">
             <Pomodoro onClick={() => switchToMode("pomodoro", settingsInfo.pomodoroTime * 60)} />
           </TabSlot>
-
+          
           <PixelHourglass mode={mode} state={hourglassState} totalDurationSeconds={countdownTotalSeconds} />
         </div>
 
@@ -524,7 +514,7 @@ function BunnyMascot({ src, message }: { src: string; message: string }) {
       <div className={`bunny-speech-bubble ${message ? "show" : ""}`}>
         {message}
       </div>
-      <img className="bunny-mascot" src={src} alt="" draggable="false" decoding="sync" />
+      <img className="bunny-mascot" src={src} alt="" draggable="false" />
     </div>
   );
 }

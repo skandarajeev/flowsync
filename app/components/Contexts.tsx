@@ -1,8 +1,9 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
+import sodium from "libsodium-wrappers-sumo"
 
-type AuthUser = { id: string; email: string } | null;
+type AuthUser = { id: string; username: string } | null;
 
 type AuthContextType = {
   user: AuthUser;
@@ -17,33 +18,25 @@ type SettingsType = {
   setPomodoroTime: (time: number) => void;
   breakTime: number;
   setBreakTime: (time: number) => void;
-  workMusic: string;
-  setWorkMusic: (music: string) => void;
-  breakMusic: string;
-  setBreakMusic: (music: string) => void;
-  volume: number;
-  setVolume: (volume: number) => void;
+  music?: string;
+  setMusic?: (music: string) => void;
 };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   token: null,
   loading: true,
-  setAuth: () => {},
-  clearAuth: () => {},
+  setAuth: () => { },
+  clearAuth: () => { },
 });
 
 export const SettingsContext = createContext<SettingsType>({
   pomodoroTime: 25,
-  setPomodoroTime: () => {},
+  setPomodoroTime: () => { },
   breakTime: 5,
-  setBreakTime: () => {},
-  workMusic: "None",
-  setWorkMusic: () => {},
-  breakMusic: "None",
-  setBreakMusic: () => {},
-  volume: 0.6,
-  setVolume: () => {},
+  setBreakTime: () => { },
+  music: "None",
+  setMusic: () => { },
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -59,7 +52,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setUser(user);
         setToken(token);
       }
-    } catch {}
+    } catch { }
     setLoading(false);
   }, []);
 
