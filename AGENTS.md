@@ -144,8 +144,7 @@ flowsync/
 │       ├── Pomodoro.tsx            Pomodoro mode-switch button (pixel-retroui styled)
 │       ├── Stopwatch.tsx           Stopwatch display + earned-break calculation
 │       ├── buttons.tsx             Play/Pause/Break button components
-│       ├── Setting.tsx             Settings popup (pomodoro/break minutes)
-│       ├── BoomBox.tsx             Music + volume popup; owns work/break track choice
+│       ├── Setting.tsx             Settings popup (pomodoro/break minutes, music selection)
 │       ├── Tasks.tsx               Guest (unauthenticated) task list, localStorage only
 │       ├── UserTasks.tsx           Authenticated task list, hits /api/tasks
 │       └── UserProfile.tsx         Login/register/logout UI
@@ -174,12 +173,7 @@ flowsync/
 └── README.md
 ```
 
-Music + audio:
-
-- Music selection lives in `app/components/BoomBox.tsx`, not `Setting.tsx`. The navbar renders a `BOOMBOX` button that opens a popup with three controls: work track (used for both pomodoro and stopwatch), break track, and volume.
-- Music options: `None`, `Focus` → `/focus.mp3`, `Lo-fi` → `/jazz.mp3`, `Rain` → `/rain.mp3`, `Brown-Noise` → `/brownNoise.mp3`.
-- `SettingsContext` holds `workMusic`, `breakMusic`, and `volume` (0–1). `Timer.tsx` picks the track via `musicForMode(mode)` and applies `volume` to both the music `<audio>` element and the completion bell.
-- Completion bell is `/mixkit-notification-bell-592.wav`.
+Music options (from `app/components/Setting.tsx`): `None`, `Focus` → `/focus.mp3`, `Lo-fi` → `/jazz.mp3`, `Rain` → `/rain.mp3`, `Brown-Noise` → `/brownNoise.mp3`. Completion bell is `/mixkit-notification-bell-592.wav`.
 
 Timer persistence:
 
@@ -279,44 +273,40 @@ Review criteria:
 
 In mentor mode, point me toward the timer state and CSS animation relationship instead of writing the final component.
 
-### Music + Boombox
+### Music Timer Glitch
 
-Music selection has moved out of `Setting.tsx` into a dedicated `BoomBox` component. The current model:
+Problem summary: music selection is saved from settings, but playback was controlled mostly by the Pomodoro play path, causing inconsistent behavior across Pomodoro and stopwatch.
 
-- `BoomBox.tsx` owns the UI for picking work track, break track, and volume, and is the only place that writes those values.
-- `Timer.tsx` reads `workMusic` / `breakMusic` / `volume` from `SettingsContext`, picks the track with `musicForMode(mode)`, and uses a single effect keyed on `[isRunning, mode, workMusic, breakMusic]` to start/stop playback. A second effect propagates `volume` live to both the music element and the bell, without restarting playback.
+Target behavior:
 
-Behavior contract:
-
-- Choices are committed only when I click `Save` in the BoomBox popup; `Cancel` discards temp state.
-- Work track plays during pomodoro and stopwatch. Break track plays during break.
+- Settings owns music selection.
+- Music choice is saved only when I click `Save Settings`.
+- Pomodoro and stopwatch play the saved music unless it is `None`.
 - Pause, stop, reset, mode switch, and timer completion stop music.
 - Music stops before the completion bell rings.
-- `None` means silence for that mode.
+- Break mode does not play music unless intentionally added later.
 
 Files relevant to review:
 
-- `app/components/BoomBox.tsx`
 - `app/components/Timer.tsx`
 - `app/components/Setting.tsx`
 - `app/page.tsx`
 - `app/components/Contexts.tsx`
 
-Concepts to keep in mind:
+Concepts to explain:
 
-- `SettingsContext` is the source of truth; `BoomBox` is just the editor.
-- Timer running state decides whether audio plays; mode decides which track.
-- Keep a single effect for play/stop and a separate effect for live volume changes so volume changes don't re-trigger the audio element.
+- Keep settings as the source of truth.
+- Let timer running state decide whether audio should play.
+- Use one React effect to synchronize audio with mode, running state, and saved music.
 - Avoid reading derived state immediately after calling a setter; let React re-render.
 
 Manual checks to run:
 
-- Save a work track, start Pomodoro, pause/resume, and verify playback follows timer state.
+- Save a music choice, start Pomodoro, pause/resume, and verify playback follows timer state.
 - Finish Pomodoro and verify music stops before the bell.
-- Change work track while running and verify playback updates.
+- Change music while running and verify playback updates.
 - Save `None` while running and verify music stops.
-- Save a break track, start a break, and verify it plays only during break.
-- Move the volume slider during playback and verify the level changes without restarting the track.
-- Start and stop stopwatch and verify the work track applies.
+- Start and stop stopwatch and verify the same saved music rule applies.
+- Start break mode and verify music stays stopped.
 
-Do not persist music in `data/db.json`, change auth/tasks/API payloads, remove timer persistence, or make any dropdown directly control playback.
+Do not suggest persisting music in `data/db.json`, changing auth/tasks/API payloads, removing timer persistence, or making the dropdown directly control playback.
