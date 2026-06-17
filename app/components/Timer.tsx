@@ -150,7 +150,6 @@ function Timer() {
   // ── persist timer state to server (fire-and-forget) ──────────────────────
   function save() {
     if (!userRef.current || !tokenRef.current || !dataKeyRef.current) {
-      console.log("Not able to save causd of a missing variable")
       return
     };
     dataApi.sendData(dataKeyRef.current, tokenRef.current, "/api/user_data",
@@ -195,8 +194,6 @@ function Timer() {
 
       return;
     }
-    console.log("The data key is ", dataKey)
-    console.log("Setting up everything")
     dataApi.fetchData(dataKey, accessToken, "/api/user_data")
       .then((_state) => {
         const state = TimerSchema.parse(_state)
