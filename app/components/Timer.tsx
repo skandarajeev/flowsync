@@ -4,9 +4,13 @@ import { useState, useEffect, useRef, useContext, type ReactNode } from "react";
 import { Break, PauseButton, PlayButton } from "./buttons";
 import Pomodoro from "./Pomodoro";
 import Stopwatch from "./Stopwatch";
+import Setting from "./Setting";
+import InfoButton from "./InfoButton";
+import { setTimerStatus } from "./timerStatus";
 import { SettingsContext, useAuth } from "./Contexts";
 import { Card, Button } from "pixel-retroui";
 import { dataApi } from "@/lib/client/api";
+import { useTheme } from "./ThemeContext";
 import z from "zod"
 
 type Mode = "pomodoro" | "break" | "stopwatch";
@@ -29,6 +33,7 @@ const START_MESSAGES = [
 
 function Timer() {
   const settingsInfo = useContext(SettingsContext)!;
+  const { theme } = useTheme();
 
 
   // References of all the start times
@@ -48,6 +53,7 @@ function Timer() {
   const countdownStartSecondsRef = useRef(25 * 60);
   const isPausedRef = useRef(isPaused);
   const modeRef = useRef<Mode>(mode);
+  const preBreakModeRef = useRef<Mode>("pomodoro"); // mode to return to after a break ends
 
   // ── stopwatch state (lifted here so Timer owns all state) ─────────────────
   const [swElapsed, setSwElapsed] = useState(0);
@@ -57,7 +63,9 @@ function Timer() {
 
 
   // ── audio ─────────────────────────────────────────────────────────────────
-  const audioRef = useRef<HTMLAudioElement>(null);
+  // Multiple tracks can play at once (layered soundscape), so we keep a pool
+  // of Audio objects instead of a single element.
+  const audioPoolRef = useRef<HTMLAudioElement[]>([]);
   const bellRef = useRef<HTMLAudioElement>(null);
 
   // ── refs that always hold latest user/token (no stale closures) ───────────
@@ -68,6 +76,8 @@ function Timer() {
   dataKeyRef.current = dataKey
   userRef.current = user;
   tokenRef.current = accessToken;
+  const autoSwitchRef = useRef(settingsInfo.autoSwitch);
+  autoSwitchRef.current = settingsInfo.autoSwitch;
 
   // ── is any timer actively running right now? ──────────────────────────────
   const isRunning = mode === "stopwatch" ? swRunning : !isPaused;
@@ -84,27 +94,32 @@ function Timer() {
         ? "/assets/sprites/bunny-break.png"
         : "/assets/sprites/bunny-pomodoro.png";
 
+  function musicForMode(m: Mode) {
+    return m === "break" ? settingsInfo.breakMusic : settingsInfo.workMusic;
+  }
+
   function shouldPlayMusic() {
-    return (
-      isRunning &&
-      (mode === "pomodoro" || mode === "stopwatch") &&
-      Boolean(settingsInfo.music) &&
-      settingsInfo.music !== "None"
-    );
+    const choice = musicForMode(mode);
+    return isRunning && Boolean(choice) && choice !== "None";
   }
 
   function stopMusic() {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
+    for (const audio of audioPoolRef.current) {
+      audio.pause();
+      audio.src = "";
+    }
+    audioPoolRef.current = [];
   }
 
   function playSavedMusic() {
-    if (!audioRef.current || !settingsInfo.music || settingsInfo.music === "None") return;
-    audioRef.current.src = settingsInfo.music;
-    audioRef.current.loop = true;
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().catch(() => { });
+    stopMusic();
+    const url = musicForMode(mode);
+    if (!url || url === "None") return;
+    const audio = new Audio(url);
+    audio.loop = true;
+    audio.volume = settingsInfo.volume;
+    audio.play().catch(() => { });
+    audioPoolRef.current.push(audio);
   }
 
   function showSpeech(message: string, useMotivationBunny = false) {
@@ -258,10 +273,8 @@ function Timer() {
   useEffect(() => {
     function switchMode() {
       const finishedMode = modeRef.current;
-      const next = modeRef.current === "pomodoro" ? "break" : "pomodoro";
-      const nextSec = next === "pomodoro"
-        ? settingsInfo.pomodoroTime * 60
-        : settingsInfo.breakTime * 60;
+      const next = finishedMode === "pomodoro" ? "break" : preBreakModeRef.current;
+      if (next === "break") preBreakModeRef.current = finishedMode;
       isPausedRef.current = true;
       setIsPaused(true);
       stopMusic();
@@ -272,7 +285,26 @@ function Timer() {
       setMode(next);
       modeRef.current = next;
       resetClockRefs();
-      setCountdownTime(nextSec);
+      if (next === "stopwatch") {
+        swRunningRef.current = false;
+        setSwRunning(false);
+        swElapsedRef.current = 0;
+        setSwElapsed(0);
+      } else {
+        const nextSec = next === "pomodoro"
+          ? settingsInfo.pomodoroTime * 60
+          : settingsInfo.breakTime * 60;
+        setCountdownTime(nextSec);
+        // Auto-switch: start the next session immediately instead of
+        // waiting for a manual START.
+        if (autoSwitchRef.current) {
+          startRef.current = Date.now();
+          pauseRef.current = 0;
+          pauseElapsedRef.current = 0;
+          isPausedRef.current = false;
+          setIsPaused(false);
+        }
+      }
       setCompletedPulse(true);
       showSpeech(finishedMode === "pomodoro" ? "Nice work!" : "You got this!");
       save();
@@ -328,11 +360,25 @@ function Timer() {
 
     playSavedMusic();
     return stopMusic;
-  }, [isRunning, mode, settingsInfo.music]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isRunning, mode, settingsInfo.workMusic, settingsInfo.breakMusic]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Publish live state so BoomBox can show playing/muted status.
+  useEffect(() => {
+    setTimerStatus({ mode, isRunning });
+  }, [mode, isRunning]);
+
+  // Apply volume changes live without restarting playback.
+  useEffect(() => {
+    for (const audio of audioPoolRef.current) audio.volume = settingsInfo.volume;
+    if (bellRef.current) bellRef.current.volume = settingsInfo.volume;
+  }, [settingsInfo.volume]);
 
   // ── helpers ───────────────────────────────────────────────────────────────
   function switchToMode(newMode: Mode, newSeconds?: number) {
     if (isRunning) return; // blocked while any timer is running
+    if (newMode === "break" && modeRef.current !== "break") {
+      preBreakModeRef.current = modeRef.current;
+    }
     stopMusic();
     setIsPaused(true); isPausedRef.current = true;
     setSwRunning(false); swRunningRef.current = false;
@@ -345,6 +391,7 @@ function Timer() {
   }
 
   function handleStartBreak(breakMinutes: number) {
+    if (modeRef.current !== "break") preBreakModeRef.current = modeRef.current;
     const secs = breakMinutes * 60;
     setMode("break"); modeRef.current = "break";
     setCountdownTime(secs);
@@ -366,25 +413,28 @@ function Timer() {
       </div>
     );
   }
-//CHanging the tab title when needed
-  const minutes = (modeRef.current === "stopwatch")? Math.floor(swElapsed/60): Math.floor(seconds / 60);
-  const remSec = (modeRef.current === "stopwatch")? Math.floor(swElapsed%60): Math.floor(seconds % 60);
+  //Changing the tab title when needed
+  const minutes = (modeRef.current === "stopwatch") ? Math.floor(swElapsed / 60) : Math.floor(seconds / 60);
+  const remSec = (modeRef.current === "stopwatch") ? Math.floor(swElapsed % 60) : Math.floor(seconds % 60);
   const formatted = `${String(minutes).padStart(2, "0")}:${String(remSec).padStart(2, "0")}`;
   useEffect(() => {
     document.title = `${formatted} - FlowSync`;
   }, [formatted]);
 
+
   return (
-    <Card bg="#9CAFAA" className="timer-card-with-mascot w-[min(92vw,620px)] px-4 sm:px-10 py-6 sm:py-8 items-center flex flex-col">
+    <Card bg={theme.card} className="timer-card-with-mascot w-[min(92vw,620px)] px-4 sm:px-10 py-6 sm:py-8 items-center flex flex-col">
       <BunnyMascot src={bunnySrc} message={speechBubble} />
+      <div className="absolute top-2 right-2 z-10">
+        <InfoButton />
+      </div>
       <div className="flex flex-col items-center justify-center w-full">
-        <audio ref={audioRef} preload="none" className="hidden" />
         <audio ref={bellRef} src="/mixkit-notification-bell-592.wav" preload="none" className="hidden" />
 
         {/* Mode tabs */}
         <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mt-2 w-full">
           <TabSlot forMode="stopwatch">
-            <Button bg="#D6DAC8" textColor="#30210b" borderColor="#30210b" shadow="#30210b"
+            <Button bg={theme.surface} textColor={theme.ink} borderColor={theme.ink} shadow={theme.ink}
               className="transition-transform duration-300 ease-in-out hover:-translate-y-1 hover:scale-110"
               onClick={() => switchToMode("stopwatch")}>
               STOPWATCH
@@ -396,8 +446,8 @@ function Timer() {
           <TabSlot forMode="pomodoro">
             <Pomodoro onClick={() => switchToMode("pomodoro", settingsInfo.pomodoroTime * 60)} />
           </TabSlot>
-          
-          <PixelHourglass mode={mode} state={hourglassState} totalDurationSeconds={countdownTotalSeconds} />
+
+          <PixelHourglass mode={mode} state={hourglassState} totalDurationSeconds={countdownTotalSeconds} remainingSeconds={seconds} />
         </div>
 
         {mode === "stopwatch" ? (
@@ -422,7 +472,7 @@ function Timer() {
               pauseRef.current = Date.now();
               swRunningRef.current = false;
               setSwRunning(false);
-              if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+              stopMusic();
               save();
             }}
             onReset={() => {
@@ -431,14 +481,15 @@ function Timer() {
               swElapsedRef.current = 0;
               setSwRunning(false);
               setSwElapsed(0);
-              if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+              stopMusic();
               save();
             }}
             onStartBreak={handleStartBreak}
           />
         ) : (
           <>
-            <p className="text-[clamp(3.25rem,18vw,8rem)] sm:text-9xl font-extrabold my-4 tracking-normal sm:tracking-widest leading-none">{formatted}</p>
+            <p className="text-[clamp(3.25rem,18vw,8rem)] sm:text-9xl font-extrabold my-4 tracking-normal sm:tracking-widest leading-none text-[var(--ink)]">{formatted}</p>
+            <div className="flex flex-wrap justify-center items-center gap-3">
             {isPaused ? (
               <PlayButton onClick={() => {
                 if (startRef.current === 0) {
@@ -467,6 +518,8 @@ function Timer() {
                 save();
               }} />
             )}
+            <Setting />
+            </div>
           </>
         )}
       </div>
@@ -478,12 +531,14 @@ function PixelHourglass({
   mode,
   state,
   totalDurationSeconds,
+  remainingSeconds,
 }: {
   mode: Mode;
   state: "running" | "paused" | "completed";
   totalDurationSeconds: number;
+  remainingSeconds: number;
 }) {
-  const [frame, setFrame] = useState(1);
+  const [loopFrame, setLoopFrame] = useState(1);
   const [reducedMotion, setReducedMotion] = useState(false);
   const className = [
     "pixel-hourglass",
@@ -503,24 +558,30 @@ function PixelHourglass({
     return () => media.removeEventListener("change", updateReducedMotion);
   }, []);
 
+  // Stopwatch has no fixed end, so it keeps a short continuous loop.
   useEffect(() => {
-    if (state === "completed") {
-      setFrame(6);
-      return;
-    }
+    if (mode !== "stopwatch" || state !== "running" || reducedMotion) return;
 
-    if (state !== "running" || reducedMotion) {
-      return;
-    }
-
-    const countdownFrameDelayMs = ((totalDurationSeconds / 4) * 1000) / 6;
-    const intervalMs = mode === "stopwatch" ? 250 : Math.max(250, countdownFrameDelayMs);
     const id = window.setInterval(() => {
-      setFrame((current) => (current === 6 ? 1 : current + 1));
-    }, intervalMs);
+      setLoopFrame((current) => (current === 6 ? 1 : current + 1));
+    }, 250);
 
     return () => window.clearInterval(id);
-  }, [mode, reducedMotion, state, totalDurationSeconds]);
+  }, [mode, reducedMotion, state]);
+
+  // Countdown modes map elapsed fraction directly onto the 6 sand frames,
+  // so the hourglass always shows how much time is left.
+  let frame: number;
+  if (state === "completed") {
+    frame = 6;
+  } else if (mode === "stopwatch") {
+    frame = loopFrame;
+  } else {
+    const progress = totalDurationSeconds > 0
+      ? 1 - remainingSeconds / totalDurationSeconds
+      : 0;
+    frame = Math.min(6, Math.max(1, Math.floor(progress * 6) + 1));
+  }
 
   const src = `/assets/sprites/hourglass-frame-${frame}.png`;
   return <img className={className} src={src} alt="" aria-hidden="true" draggable="false" />;
@@ -532,7 +593,7 @@ function BunnyMascot({ src, message }: { src: string; message: string }) {
       <div className={`bunny-speech-bubble ${message ? "show" : ""}`}>
         {message}
       </div>
-      <img className="bunny-mascot" src={src} alt="" draggable="false" />
+      <img className="bunny-mascot" src={src} alt="" draggable="false" decoding="sync" />
     </div>
   );
 }
