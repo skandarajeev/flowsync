@@ -25,7 +25,8 @@ const fetchTasksSchema = z.array(z.object({
 export const TaskSchema = z.object({
     id: z.string(),
     title: z.string(),
-    completed: z.union([z.number(), z.boolean()])
+    completed: z.union([z.number(), z.boolean()]),
+    timeSpent: z.number().optional()
 
 })
 export const TasksArraySchema = z.array(TaskSchema)
